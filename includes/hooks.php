@@ -86,38 +86,40 @@ add_filter( 'rest_user_query', 'pmpro_testimonials_rest_user_query', 10, 2 );
  * Don't count testimonials when deciding whether the REST API shows a single user publicly.
  *
  * WordPress lets anyone view a user through /wp/v2/users/<id> once they have a published post in
- * any REST-enabled post type, and has no filter for that check. This runs on rest_pre_dispatch and
- * returns the same error WordPress returns for users without published posts.
+ * any REST-enabled post type, and has no filter for that check. This runs before the users controller's
+ * callbacks and returns the same error WordPress returns for users without published posts.
  *
  * @since TBD
  *
- * @param mixed           $result  Response to replace the requested version with.
- * @param WP_REST_Server  $server  Server instance.
- * @param WP_REST_Request $request Request used to generate the response.
+ * @param WP_REST_Response|WP_HTTP_Response|WP_Error|mixed $response Result to send to the client.
+ * @param array                                            $handler  Route handler used for the request.
+ * @param WP_REST_Request                                  $request  Request used to generate the response.
  * @return mixed
  */
-function pmpro_testimonials_rest_pre_dispatch_user( $result, $server, $request ) {
-	if ( ! empty( $result ) || ! in_array( $request->get_method(), array( 'GET', 'HEAD' ), true ) ) {
-		return $result;
+function pmpro_testimonials_rest_request_before_callbacks_user( $response, $handler, $request ) {
+	if ( ! empty( $response ) ) {
+		return $response;
 	}
 
-	// REST API routes match case-insensitively, so this check does too.
-	if ( ! preg_match( '#^/wp/v2/users/(\d+)$#i', $request->get_route(), $matches ) ) {
-		return $result;
+	// Only check requests for a single user.
+	if ( empty( $handler['callback'] ) || ! is_array( $handler['callback'] ) || ! $handler['callback'][0] instanceof WP_REST_Users_Controller || 'get_item' !== $handler['callback'][1] ) {
+		return $response;
 	}
+
+	// Use the same user ID the users controller uses.
+	$user_id = (int) $request['id'];
 
 	// Match the WordPress check: users can always view themselves, and users who can edit or list users can view anyone.
-	$user_id = (int) $matches[1];
 	if ( get_current_user_id() === $user_id || current_user_can( 'edit_user', $user_id ) || current_user_can( 'list_users' ) ) {
-		return $result;
+		return $response;
 	}
 
 	// Leave the request to WordPress unless testimonials are the user's only published posts.
 	$post_types = array_values( array_diff( get_post_types( array( 'show_in_rest' => true ), 'names' ), array( 'pmpro_testimonial' ) ) );
 	if ( ! count_user_posts( $user_id, 'pmpro_testimonial' ) || ( ! empty( $post_types ) && count_user_posts( $user_id, $post_types ) ) ) {
-		return $result;
+		return $response;
 	}
 
 	return new WP_Error( 'rest_user_cannot_view', __( 'Sorry, you are not allowed to list users.', 'pmpro-testimonials' ), array( 'status' => rest_authorization_required_code() ) );
 }
-add_filter( 'rest_pre_dispatch', 'pmpro_testimonials_rest_pre_dispatch_user', 10, 3 );
+add_filter( 'rest_request_before_callbacks', 'pmpro_testimonials_rest_request_before_callbacks_user', 10, 3 );
